@@ -11,6 +11,7 @@ import {
   GraphQLDirective,
   GraphQLIncludeDirective,
   GraphQLSkipDirective,
+  GraphQLDeferDirective,
 } from '../../type/directives';
 import {
   GraphQLInt,
@@ -335,6 +336,7 @@ export const testSchema = new GraphQLSchema({
   directives: [
     GraphQLIncludeDirective,
     GraphQLSkipDirective,
+    GraphQLDeferDirective,
     new GraphQLDirective({
       name: 'onQuery',
       locations: ['QUERY'],
