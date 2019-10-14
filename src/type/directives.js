@@ -181,7 +181,12 @@ export const GraphQLDeferDirective = new GraphQLDirective({
   args: {
     if: {
       type: GraphQLBoolean,
-      description: 'Defer fragment when true or undefined.',
+      description: 'Deferred when true or undefined.',
+    },
+    label: {
+      type: GraphQLNonNull(GraphQLString),
+      description: 'Unique name',
+      // TODO: Add defaultValue for label?
     },
   },
 });

@@ -40,6 +40,7 @@ import {
 import {
   GraphQLIncludeDirective,
   GraphQLSkipDirective,
+  GraphQLDeferDirective,
 } from '../type/directives';
 import {
   type GraphQLObjectType,
@@ -353,6 +354,7 @@ function executeOperation(
     operation.selectionSet,
     Object.create(null),
     Object.create(null),
+    [],
   );
 
   const path = undefined;
@@ -477,6 +479,7 @@ export function collectFields(
   selectionSet: SelectionSetNode,
   fields: ObjMap<Array<FieldNode>>,
   visitedFragmentNames: ObjMap<boolean>,
+  deferredFragmentLabels: Array<string>,
 ): ObjMap<Array<FieldNode>> {
   for (const selection of selectionSet.selections) {
     switch (selection.kind) {
@@ -484,11 +487,24 @@ export function collectFields(
         if (!shouldIncludeNode(exeContext, selection)) {
           continue;
         }
+
         const name = getFieldEntryKey(selection);
         if (!fields[name]) {
           fields[name] = [];
         }
-        fields[name].push(selection);
+
+        const deferredFragmentLabel =
+          deferredFragmentLabels.length > 0
+            ? deferredFragmentLabels[0]
+            : undefined;
+
+        fields[name].push({
+          ...selection,
+          ...(deferredFragmentLabel
+            ? { deferredLabel: deferredFragmentLabel }
+            : {}),
+        });
+
         break;
       }
       case Kind.INLINE_FRAGMENT: {
@@ -504,16 +520,30 @@ export function collectFields(
           selection.selectionSet,
           fields,
           visitedFragmentNames,
+          deferredFragmentLabels,
         );
         break;
       }
       case Kind.FRAGMENT_SPREAD: {
         const fragName = selection.name.value;
+        const deferredLabel = getDeferredNodeLabel(exeContext, selection);
+
+        if (!shouldIncludeNode(exeContext, selection)) {
+          continue;
+        }
         if (
-          visitedFragmentNames[fragName] ||
-          !shouldIncludeNode(exeContext, selection)
+          visitedFragmentNames[fragName] &&
+          // Cannot continue in this case because nodes must be mutated to include deferred fragment label
+          !deferredLabel
         ) {
           continue;
+        }
+        if (
+          deferredLabel &&
+          // If deferredFragmentLabels is not empty, defer to parent deferred fragment
+          deferredFragmentLabels.length === 0
+        ) {
+          deferredFragmentLabels.push(deferredLabel);
         }
         visitedFragmentNames[fragName] = true;
         const fragment = exeContext.fragments[fragName];
@@ -529,6 +559,7 @@ export function collectFields(
           fragment.selectionSet,
           fields,
           visitedFragmentNames,
+          deferredFragmentLabels,
         );
         break;
       }
@@ -563,6 +594,27 @@ function shouldIncludeNode(
     return false;
   }
   return true;
+}
+
+/**
+ * Determines if a field should be deferred based on the @defer directive
+ * where @defer without an "if" condition defaults to true, and returns its unique label.
+ */
+function getDeferredNodeLabel(
+  exeContext: ExecutionContext,
+  node: FragmentSpreadNode | InlineFragmentNode,
+): string {
+  const defer = getDirectiveValues(
+    GraphQLDeferDirective,
+    node,
+    exeContext.variableValues,
+  );
+  if (!defer) {
+    return '';
+  }
+  return defer.if !== false && typeof defer.label === 'string'
+    ? defer.label
+    : '';
 }
 
 /**
@@ -1105,6 +1157,7 @@ function _collectSubfields(
 ): ObjMap<Array<FieldNode>> {
   let subFieldNodes = Object.create(null);
   const visitedFragmentNames = Object.create(null);
+  const deferredFragmentLabels = [];
   for (const node of fieldNodes) {
     if (node.selectionSet) {
       subFieldNodes = collectFields(
@@ -1113,6 +1166,7 @@ function _collectSubfields(
         node.selectionSet,
         subFieldNodes,
         visitedFragmentNames,
+        deferredFragmentLabels,
       );
     }
   }

@@ -234,6 +234,7 @@ export function createSourceEventStream(
       exeContext.operation.selectionSet,
       Object.create(null),
       Object.create(null),
+      [],
     );
     const responseNames = Object.keys(fields);
     const responseName = responseNames[0];

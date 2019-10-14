@@ -253,6 +253,7 @@ export type FieldNode = {
   +arguments?: $ReadOnlyArray<ArgumentNode>,
   +directives?: $ReadOnlyArray<DirectiveNode>,
   +selectionSet?: SelectionSetNode,
+  +deferredLabel?: string,
   ...
 };
 
