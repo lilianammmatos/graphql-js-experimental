@@ -33,6 +33,11 @@ import {
 import { assertValidSchema } from '../type/validate';
 import { type GraphQLSchema } from '../type/schema';
 import {
+  PatchDispatcher,
+  type ExecutionPatchResult,
+  type Patch,
+} from '../type/patch';
+import {
   SchemaMetaFieldDef,
   TypeMetaFieldDef,
   TypeNameMetaFieldDef,
@@ -104,6 +109,7 @@ export type ExecutionContext = {|
   fieldResolver: GraphQLFieldResolver<any, any>,
   typeResolver: GraphQLTypeResolver<any, any>,
   errors: Array<GraphQLError>,
+  dispatcher: PatchDispatcher,
 |};
 
 /**
@@ -115,6 +121,7 @@ export type ExecutionContext = {|
 export type ExecutionResult = {
   errors?: $ReadOnlyArray<GraphQLError>,
   data?: ObjMap<mixed> | null,
+  patches?: AsyncIterable<ExecutionPatchResult>,
   ...
 };
 
@@ -226,6 +233,57 @@ function executeImpl(args: ExecutionArgs): ExecutionResult {
   return buildResponse(exeContext, data);
 }
 
+function buildPatchResponse(
+  path: Path,
+  data: ObjMap<any> | null,
+  deferredLabel: string,
+): ExecutionPatchResult {
+  return {
+    path: pathToArray(path),
+    label: deferredLabel,
+    data,
+    // errors: undefined, // TODO: Get errors in patch
+  };
+}
+
+function dispatchPatch(
+  exeContext: ExecutionContext,
+  label: string,
+  path: string,
+  patch: Patch,
+): void {
+  exeContext.dispatcher.dispatch(patch, label, path);
+}
+
+function bubbleDispatch(
+  exeContext: ExecutionContext,
+  label: string,
+  path: string,
+  patch: Patch,
+) {
+  exeContext.dispatcher.addChild(patch, label, path);
+}
+
+function buildPatch(
+  exeContext: ExecutionContext,
+  path: Path,
+  data: PromiseOrValue<mixed>,
+  deferredLabel: string,
+): Patch {
+  if (isPromise(data)) {
+    return data.then(resolved =>
+      buildPatch(exeContext, path, resolved, deferredLabel),
+    );
+  }
+
+  return Promise.resolve({
+    label: deferredLabel,
+    path: pathToArray(path).toString(),
+    // TODO: See if you can get rid of this any cast
+    result: buildPatchResponse(path, (data: any), deferredLabel),
+  });
+}
+
 /**
  * Given a completed execution context and data, build the { errors, data }
  * response defined by the "Response" section of the GraphQL specification.
@@ -237,9 +295,13 @@ function buildResponse(
   if (isPromise(data)) {
     return data.then(resolved => buildResponse(exeContext, resolved));
   }
-  return exeContext.errors.length === 0
-    ? { data }
-    : { errors: exeContext.errors, data };
+  const patches = exeContext.dispatcher.getPatches();
+  const response =
+    exeContext.errors.length === 0
+      ? { data }
+      : { errors: exeContext.errors, data };
+
+  return patches ? { ...response, patches } : response;
 }
 
 /**
@@ -335,6 +397,8 @@ export function buildExecutionContext(
     variableValues: coercedVariableValues.coerced,
     fieldResolver: fieldResolver || defaultFieldResolver,
     typeResolver: typeResolver || defaultTypeResolver,
+    // TODO: Pass these properties in from buildExecution arugments
+    dispatcher: new PatchDispatcher(),
     errors: [],
   };
 }
@@ -771,12 +835,59 @@ function completeValueCatchingError(
   info: GraphQLResolveInfo,
   path: Path,
   result: mixed,
+  closestDeferredParent?: string,
 ): PromiseOrValue<mixed> {
+  const pathArray = pathToArray(path);
+  const isListItem = typeof pathArray[pathArray.length - 1] === 'number';
+  const shouldDefer = fieldNodes.every(
+    (node, index, array) =>
+      !isListItem &&
+      typeof node.deferredLabel === 'string' &&
+      // TODO: Check if this is possible that label would be different
+      // This should NOT be possible, highest deferred fragment should take precedence
+      // Write tests to assert this before removing this condition
+      (index < array.length - 1
+        ? node.deferredLabel === array[index + 1].deferredLabel
+        : true),
+  );
+
+  let anyDeferredFieldNode = undefined;
+  const hasAnyDeferredFieldNode = fieldNodes.some((node, index) => {
+    const ret = !isListItem && typeof node.deferredLabel === 'string';
+    if (ret) {
+      anyDeferredFieldNode = node;
+    }
+    return ret;
+  });
+
+  let deferredLabel = '';
+  let currentClosestDeferredParent = '';
+
+  if (shouldDefer) {
+    deferredLabel = fieldNodes[0].deferredLabel || '';
+    currentClosestDeferredParent =
+      pathToArray(path).toString() || closestDeferredParent || '';
+  } else if (hasAnyDeferredFieldNode) {
+    deferredLabel = anyDeferredFieldNode
+      ? anyDeferredFieldNode.deferredLabel
+      : '';
+    currentClosestDeferredParent =
+      pathToArray(path).toString() || closestDeferredParent || '';
+  }
+
   try {
     let completed;
     if (isPromise(result)) {
       completed = result.then(resolved =>
-        completeValue(exeContext, returnType, fieldNodes, info, path, resolved),
+        completeValue(
+          exeContext,
+          returnType,
+          fieldNodes,
+          info,
+          path,
+          resolved,
+          currentClosestDeferredParent,
+        ),
       );
     } else {
       completed = completeValue(
@@ -786,7 +897,30 @@ function completeValueCatchingError(
         info,
         path,
         result,
+        currentClosestDeferredParent,
       );
+    }
+
+    if (hasAnyDeferredFieldNode) {
+      // TODO: Always create bundle
+      const patch = buildPatch(exeContext, path, completed, deferredLabel);
+
+      if (closestDeferredParent) {
+        // TODO: dispatchToParent
+        bubbleDispatch(exeContext, deferredLabel, closestDeferredParent, patch);
+      } else {
+        // TODO: dispatch (potential sibling)
+        dispatchPatch(
+          exeContext,
+          deferredLabel,
+          currentClosestDeferredParent,
+          patch,
+        );
+      }
+
+      if (shouldDefer) {
+        return null;
+      }
     }
 
     if (isPromise(completed)) {
@@ -849,6 +983,7 @@ function completeValue(
   info: GraphQLResolveInfo,
   path: Path,
   result: mixed,
+  closestDeferredParent?: string,
 ): PromiseOrValue<mixed> {
   // If result is an Error, throw a located error.
   if (result instanceof Error) {
@@ -865,6 +1000,7 @@ function completeValue(
       info,
       path,
       result,
+      closestDeferredParent,
     );
     if (completed === null) {
       throw new Error(
@@ -888,6 +1024,7 @@ function completeValue(
       info,
       path,
       result,
+      closestDeferredParent,
     );
   }
 
@@ -941,6 +1078,7 @@ function completeListValue(
   info: GraphQLResolveInfo,
   path: Path,
   result: mixed,
+  closestDeferredParent?: string,
 ): PromiseOrValue<$ReadOnlyArray<mixed>> {
   if (!isCollection(result)) {
     throw new GraphQLError(
@@ -964,6 +1102,7 @@ function completeListValue(
       info,
       fieldPath,
       item,
+      closestDeferredParent,
     );
 
     if (!containsPromise && isPromise(completedItem)) {
