@@ -291,4 +291,5 @@ const queryType = new GraphQLObjectType({
 export const StarWarsSchema = new GraphQLSchema({
   query: queryType,
   types: [humanType, droidType],
+  experimentalDeferFragmentSpreads: true,
 });

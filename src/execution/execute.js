@@ -590,7 +590,11 @@ export function collectFields(
       }
       case Kind.FRAGMENT_SPREAD: {
         const fragName = selection.name.value;
-        const deferredLabel = getDeferredNodeLabel(exeContext, selection);
+
+        const deferredLabel = exeContext.schema
+          .__experimentalDeferFragmentSpreads
+          ? getDeferredNodeLabel(exeContext, selection)
+          : '';
 
         if (!shouldIncludeNode(exeContext, selection)) {
           continue;
