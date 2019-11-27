@@ -236,13 +236,14 @@ function executeImpl(args: ExecutionArgs): ExecutionResult {
 function buildPatchResponse(
   path: Path,
   data: ObjMap<any> | null,
+  errors: Array<GraphQLError>,
   deferredLabel: string,
 ): ExecutionPatchResult {
+  const response = errors.length === 0 ? { data } : { data, errors };
   return {
     path: pathToArray(path),
     label: deferredLabel,
-    data,
-    // errors: undefined, // TODO: Get errors in patch
+    ...response,
   };
 }
 
@@ -255,24 +256,26 @@ function dispatchPatch(
   exeContext.dispatcher.dispatch(patch, label, path);
 }
 
-function bubbleDispatch(
+function deferDispatchPatchToParent(
   exeContext: ExecutionContext,
   label: string,
+  parentPath: string,
   path: string,
   patch: Patch,
 ) {
-  exeContext.dispatcher.addChild(patch, label, path);
+  exeContext.dispatcher.deferDispatch(patch, label, parentPath, path);
 }
 
 function buildPatch(
   exeContext: ExecutionContext,
   path: Path,
   data: PromiseOrValue<mixed>,
+  errors: Array<GraphQLError>,
   deferredLabel: string,
 ): Patch {
   if (isPromise(data)) {
     return data.then(resolved =>
-      buildPatch(exeContext, path, resolved, deferredLabel),
+      buildPatch(exeContext, path, resolved, errors, deferredLabel),
     );
   }
 
@@ -280,7 +283,7 @@ function buildPatch(
     label: deferredLabel,
     path: pathToArray(path).toString(),
     // TODO: See if you can get rid of this any cast
-    result: buildPatchResponse(path, (data: any), deferredLabel),
+    result: buildPatchResponse(path, (data: any), errors, deferredLabel),
   });
 }
 
@@ -495,6 +498,7 @@ function executeFields(
   sourceValue: mixed,
   path: Path | void,
   fields: ObjMap<Array<FieldNode>>,
+  closestDeferredParent?: string,
 ): PromiseOrValue<ObjMap<mixed>> {
   const results = Object.create(null);
   let containsPromise = false;
@@ -508,6 +512,7 @@ function executeFields(
       sourceValue,
       fieldNodes,
       fieldPath,
+      closestDeferredParent,
     );
 
     if (result !== undefined) {
@@ -726,6 +731,7 @@ function resolveField(
   source: mixed,
   fieldNodes: $ReadOnlyArray<FieldNode>,
   path: Path,
+  closestDeferredParent?: string,
 ): PromiseOrValue<mixed> {
   const fieldNode = fieldNodes[0];
   const fieldName = fieldNode.name.value;
@@ -763,6 +769,7 @@ function resolveField(
     info,
     path,
     result,
+    closestDeferredParent,
   );
 }
 
@@ -842,10 +849,13 @@ function completeValueCatchingError(
   closestDeferredParent?: string,
 ): PromiseOrValue<mixed> {
   const pathArray = pathToArray(path);
+  // Items in a list inherit the deferred status of the list type
+  // Therfore, we do not need to defer the item itself.
   const isListItem = typeof pathArray[pathArray.length - 1] === 'number';
   const shouldDefer = fieldNodes.every(
     (node, index, array) =>
       !isListItem &&
+      node.deferredLabel &&
       typeof node.deferredLabel === 'string' &&
       // TODO: Check if this is possible that label would be different
       // This should NOT be possible, highest deferred fragment should take precedence
@@ -855,28 +865,46 @@ function completeValueCatchingError(
         : true),
   );
 
-  let anyDeferredFieldNode = undefined;
-  const hasAnyDeferredFieldNode = fieldNodes.some((node, index) => {
-    const ret = !isListItem && typeof node.deferredLabel === 'string';
+  let anyDeferredFieldNode;
+  // A field can be in both a standard and deferred fragment.
+  // Although the data for the field is returned as part of the initial response,
+  // it also must be returned from the appropriate patches.
+  const hasAnyDeferredFieldNode = fieldNodes.some(node => {
+    const ret =
+      !isListItem &&
+      typeof node.deferredLabel === 'string' &&
+      node.deferredLabel;
     if (ret) {
       anyDeferredFieldNode = node;
     }
     return ret;
   });
 
+  // TODO: Confimm this is needed if it's already in the "validation phase"
+  // Throw error if @defer is applied to a non-nullable field,
+  // this is already caught in the validation phase.
+  if (isNonNullType(returnType) && shouldDefer) {
+    throw locatedError(
+      new Error(
+        `@defer cannot be applied on non-nullable field ${info.parentType.name}.${info.fieldName}`,
+      ),
+      fieldNodes,
+      pathToArray(path),
+    );
+  }
+
   let deferredLabel = '';
-  let currentClosestDeferredParent = '';
+  const currentClosestDeferredParent =
+    shouldDefer || hasAnyDeferredFieldNode
+      ? pathToArray(path).toString()
+      : closestDeferredParent || '';
 
   if (shouldDefer) {
     deferredLabel = fieldNodes[0].deferredLabel || '';
-    currentClosestDeferredParent =
-      pathToArray(path).toString() || closestDeferredParent || '';
   } else if (hasAnyDeferredFieldNode) {
     deferredLabel = anyDeferredFieldNode
       ? anyDeferredFieldNode.deferredLabel
       : '';
-    currentClosestDeferredParent =
-      pathToArray(path).toString() || closestDeferredParent || '';
   }
 
   try {
@@ -906,18 +934,21 @@ function completeValueCatchingError(
     }
 
     if (hasAnyDeferredFieldNode) {
-      // TODO: Always create bundle
-      const patch = buildPatch(exeContext, path, completed, deferredLabel);
+      const patch = buildPatch(exeContext, path, completed, [], deferredLabel);
 
       if (closestDeferredParent) {
-        // TODO: dispatchToParent
-        bubbleDispatch(exeContext, deferredLabel, closestDeferredParent, patch);
+        deferDispatchPatchToParent(
+          exeContext,
+          deferredLabel,
+          closestDeferredParent,
+          pathToArray(path).toString(),
+          patch,
+        );
       } else {
-        // TODO: dispatch (potential sibling)
         dispatchPatch(
           exeContext,
           deferredLabel,
-          currentClosestDeferredParent,
+          pathToArray(path).toString(),
           patch,
         );
       }
@@ -930,13 +961,127 @@ function completeValueCatchingError(
     if (isPromise(completed)) {
       // Note: we don't rely on a `catch` method, but we do expect "thenable"
       // to take a second callback for the error case.
-      return completed.then(undefined, error =>
-        handleFieldError(error, fieldNodes, path, returnType, exeContext),
-      );
+      return completed.then(undefined, error => {
+        if (closestDeferredParent) {
+          // TODO: Check if this is possible if defer is only fragment spreads
+          // If this field is a child of a deferred field, return errors from it
+          // with the appropriate patch.
+          handleDeferredFieldError(
+            error,
+            fieldNodes,
+            path,
+            returnType,
+            exeContext,
+            closestDeferredParent,
+          );
+        }
+        if (shouldDefer) {
+          return null;
+        }
+        return handleFieldError(
+          error,
+          fieldNodes,
+          path,
+          returnType,
+          exeContext,
+        );
+      });
     }
     return completed;
   } catch (error) {
+    if (closestDeferredParent || shouldDefer) {
+      handleDeferredFieldError(
+        error,
+        fieldNodes,
+        path,
+        returnType,
+        exeContext,
+        closestDeferredParent,
+      );
+    }
+    if (shouldDefer) {
+      return null;
+    }
     return handleFieldError(error, fieldNodes, path, returnType, exeContext);
+  }
+}
+
+function handleDeferredFieldError(
+  rawError,
+  fieldNodes,
+  path,
+  returnType,
+  exeContext,
+  closestDeferredParent,
+) {
+  const error = locatedError(
+    asErrorInstance(rawError),
+    fieldNodes,
+    pathToArray(path),
+  );
+  const pathArray = pathToArray(path);
+  const isListItem = typeof pathArray[pathArray.length - 1] === 'number';
+
+  const shouldDefer = fieldNodes.every(
+    (node, index, array) =>
+      !isListItem &&
+      typeof node.deferredLabel === 'string' &&
+      // TODO: Check if this is possible that label would be different
+      // This should NOT be possible, highest deferred fragment should take precedence
+      // Write tests to assert this before removing this condition
+      (index < array.length - 1
+        ? node.deferredLabel === array[index + 1].deferredLabel
+        : true),
+  );
+
+  let anyDeferredFieldNode;
+  // A field can be in both a standard and deferred fragment
+  // Although the data for the field is returned as part of the initial response
+  // it also needs to be on the appropriate patches
+  const hasAnyDeferredFieldNode = fieldNodes.some(node => {
+    const ret = !isListItem && typeof node.deferredLabel === 'string';
+    if (ret) {
+      anyDeferredFieldNode = node;
+    }
+    return ret;
+  });
+
+  let deferredLabel = '';
+
+  if (shouldDefer) {
+    deferredLabel = fieldNodes[0].deferredLabel || '';
+  } else if (hasAnyDeferredFieldNode) {
+    deferredLabel = anyDeferredFieldNode
+      ? anyDeferredFieldNode.deferredLabel
+      : '';
+  }
+
+  if (hasAnyDeferredFieldNode) {
+    const patch = buildPatch(exeContext, path, null, [error], deferredLabel);
+
+    if (closestDeferredParent) {
+      deferDispatchPatchToParent(
+        exeContext,
+        deferredLabel,
+        closestDeferredParent,
+        pathToArray(path).toString(),
+        patch,
+      );
+    } else {
+      dispatchPatch(
+        exeContext,
+        deferredLabel,
+        pathToArray(path).toString(),
+        patch,
+      );
+    }
+  }
+
+  // If it is its parent that is deferred, errors should be returned with the
+  // parent's patch, so store it on ExecutionContext first.
+  // TODO: Investigate whether this condition is ever possible?
+  if (closestDeferredParent && !hasAnyDeferredFieldNode) {
+    // deferErrorToParent(exeContext, deferredLabel, closestDeferredParent, error);
   }
 }
 
@@ -1048,6 +1193,7 @@ function completeValue(
       info,
       path,
       result,
+      closestDeferredParent,
     );
   }
 
@@ -1060,6 +1206,7 @@ function completeValue(
       info,
       path,
       result,
+      closestDeferredParent,
     );
   }
 
@@ -1144,6 +1291,7 @@ function completeAbstractValue(
   info: GraphQLResolveInfo,
   path: Path,
   result: mixed,
+  closestDeferredParent?: string,
 ): PromiseOrValue<ObjMap<mixed>> {
   const resolveTypeFn = returnType.resolveType || exeContext.typeResolver;
   const contextValue = exeContext.contextValue;
@@ -1165,6 +1313,7 @@ function completeAbstractValue(
         info,
         path,
         result,
+        closestDeferredParent,
       ),
     );
   }
@@ -1183,6 +1332,7 @@ function completeAbstractValue(
     info,
     path,
     result,
+    closestDeferredParent,
   );
 }
 
@@ -1228,6 +1378,7 @@ function completeObjectValue(
   info: GraphQLResolveInfo,
   path: Path,
   result: mixed,
+  closestDeferredParent?: string,
 ): PromiseOrValue<ObjMap<mixed>> {
   // If there is an isTypeOf predicate function, call it with the
   // current result. If isTypeOf returns false, then raise an error rather
@@ -1246,6 +1397,7 @@ function completeObjectValue(
           fieldNodes,
           path,
           result,
+          closestDeferredParent,
         );
       });
     }
@@ -1261,6 +1413,7 @@ function completeObjectValue(
     fieldNodes,
     path,
     result,
+    closestDeferredParent,
   );
 }
 
@@ -1281,10 +1434,18 @@ function collectAndExecuteSubfields(
   fieldNodes: $ReadOnlyArray<FieldNode>,
   path: Path,
   result: mixed,
+  closestDeferredParent?: string,
 ): PromiseOrValue<ObjMap<mixed>> {
   // Collect sub-fields to execute to complete this value.
   const subFieldNodes = collectSubfields(exeContext, returnType, fieldNodes);
-  return executeFields(exeContext, returnType, result, path, subFieldNodes);
+  return executeFields(
+    exeContext,
+    returnType,
+    result,
+    path,
+    subFieldNodes,
+    closestDeferredParent,
+  );
 }
 
 /**
@@ -1301,6 +1462,15 @@ function _collectSubfields(
   let subFieldNodes = Object.create(null);
   const visitedFragmentNames = Object.create(null);
   const deferredFragmentLabels = [];
+  // If parent field has deferredLabel, add it deferredFragmentLabels
+  // so that it's subfields will also have this label set.
+  fieldNodes.some(fieldNode => {
+    if (fieldNode.deferredLabel) {
+      deferredFragmentLabels.push(fieldNode.deferredLabel);
+      return true;
+    }
+    return false;
+  });
   for (const node of fieldNodes) {
     if (node.selectionSet) {
       subFieldNodes = collectFields(
