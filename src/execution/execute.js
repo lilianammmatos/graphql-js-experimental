@@ -136,6 +136,11 @@ export type ExecutionArgs = {|
   typeResolver?: ?GraphQLTypeResolver<any, any>,
 |};
 
+export type DeferredFragmentFieldInfo = {|
+  deferredFragmentLabel: string,
+  resolveFieldToNull: boolean,
+|};
+
 /**
  * Implements the "Evaluating requests" section of the GraphQL specification.
  *
@@ -415,11 +420,13 @@ function executeOperation(
   rootValue: mixed,
 ): PromiseOrValue<ObjMap<mixed> | null> {
   const type = getOperationRootType(exeContext.schema, operation);
-  const fields = collectFields(
+  const { fields } = collectFields(
     exeContext,
     type,
     operation.selectionSet,
     Object.create(null),
+    Object.create(null),
+    '',
     Object.create(null),
     [],
   );
@@ -498,6 +505,8 @@ function executeFields(
   sourceValue: mixed,
   path: Path | void,
   fields: ObjMap<Array<FieldNode>>,
+  deferredFragmentLabels?: Array<string>,
+  deferredFragmentFields?: ObjMap<DeferredFragmentFieldInfo>,
   closestDeferredParent?: string,
 ): PromiseOrValue<ObjMap<mixed>> {
   const results = Object.create(null);
@@ -512,6 +521,8 @@ function executeFields(
       sourceValue,
       fieldNodes,
       fieldPath,
+      deferredFragmentLabels,
+      deferredFragmentFields,
       closestDeferredParent,
     );
 
@@ -547,9 +558,15 @@ export function collectFields(
   runtimeType: GraphQLObjectType,
   selectionSet: SelectionSetNode,
   fields: ObjMap<Array<FieldNode>>,
-  visitedFragmentNames: ObjMap<boolean>,
+  visitedFragmentFields: ObjMap<ObjMap<FieldNode>>,
+  fragmentName: string,
+  deferredFragmentFields: ObjMap<DeferredFragmentFieldInfo>,
   deferredFragmentLabels: Array<string>,
-): ObjMap<Array<FieldNode>> {
+): {|
+  fields: ObjMap<Array<FieldNode>>,
+  deferredFragmentLabels: Array<string>,
+  deferredFragmentFields: ObjMap<DeferredFragmentFieldInfo>,
+|} {
   for (const selection of selectionSet.selections) {
     switch (selection.kind) {
       case Kind.FIELD: {
@@ -557,23 +574,41 @@ export function collectFields(
           continue;
         }
 
+        const deferredFragmentLabel =
+          deferredFragmentLabels.length > 0
+            ? deferredFragmentLabels[deferredFragmentLabels.length - 1]
+            : '';
+
         const name = getFieldEntryKey(selection);
         if (!fields[name]) {
           fields[name] = [];
         }
 
-        const deferredFragmentLabel =
-          deferredFragmentLabels.length > 0
-            ? deferredFragmentLabels[0]
-            : undefined;
+        if (fragmentName) {
+          visitedFragmentFields[fragmentName][name] = selection;
+        }
 
-        fields[name].push({
-          ...selection,
-          ...(deferredFragmentLabel
-            ? { deferredLabel: deferredFragmentLabel }
-            : {}),
-        });
+        if (!deferredFragmentLabel) {
+          if (deferredFragmentFields[name]) {
+            deferredFragmentFields[name] = {
+              ...deferredFragmentFields[name],
+              resolveFieldToNull: false,
+            };
+          }
+        }
 
+        if (deferredFragmentLabel) {
+          if (!deferredFragmentFields[name]) {
+            const resolveFieldToNull = !Boolean(fields[name].length);
+
+            deferredFragmentFields[name] = {
+              resolveFieldToNull,
+              deferredFragmentLabel,
+            };
+          }
+        }
+
+        fields[name].push(selection);
         break;
       }
       case Kind.INLINE_FRAGMENT: {
@@ -588,38 +623,50 @@ export function collectFields(
           runtimeType,
           selection.selectionSet,
           fields,
-          visitedFragmentNames,
+          visitedFragmentFields,
+          fragmentName,
+          deferredFragmentFields,
           deferredFragmentLabels,
         );
         break;
       }
       case Kind.FRAGMENT_SPREAD: {
-        const fragName = selection.name.value;
+        const currFragmentName = selection.name.value;
 
-        const deferredLabel = exeContext.schema
+        const deferredFragmentLabel =
+          deferredFragmentLabels.length > 0 ? deferredFragmentLabels[0] : '';
+        const currDeferredFragmentLabel = exeContext.schema
           .__experimentalDeferFragmentSpreads
-          ? getDeferredNodeLabel(exeContext, selection)
+          ? getDeferredNodeLabel(exeContext, selection) || deferredFragmentLabel
           : '';
+
+        if (currDeferredFragmentLabel) {
+          // TODO: This should be set to avoid doing this check?
+          if (!deferredFragmentLabels.includes(currDeferredFragmentLabel)) {
+            deferredFragmentLabels.push(currDeferredFragmentLabel);
+          }
+        }
 
         if (!shouldIncludeNode(exeContext, selection)) {
           continue;
         }
-        if (
-          visitedFragmentNames[fragName] &&
-          // Cannot continue in this case because nodes must be mutated to include deferred fragment label
-          !deferredLabel
-        ) {
+        if (visitedFragmentFields[currFragmentName]) {
+          if (currDeferredFragmentLabel) {
+            Object.keys(visitedFragmentFields[currFragmentName] || {}).forEach(
+              currFieldName => {
+                deferredFragmentFields[currFieldName] = {
+                  ...(deferredFragmentFields[currFieldName] || {}),
+                  // TODO: This need to be an array to handle children of deferred fragments
+                  deferredFragmentLabel: currDeferredFragmentLabel,
+                  resolveFieldToNull: false,
+                };
+              },
+            );
+          }
           continue;
         }
-        if (
-          deferredLabel &&
-          // If deferredFragmentLabels is not empty, defer to parent deferred fragment
-          deferredFragmentLabels.length === 0
-        ) {
-          deferredFragmentLabels.push(deferredLabel);
-        }
-        visitedFragmentNames[fragName] = true;
-        const fragment = exeContext.fragments[fragName];
+        visitedFragmentFields[currFragmentName] = {};
+        const fragment = exeContext.fragments[currFragmentName];
         if (
           !fragment ||
           !doesFragmentConditionMatch(exeContext, fragment, runtimeType)
@@ -631,14 +678,16 @@ export function collectFields(
           runtimeType,
           fragment.selectionSet,
           fields,
-          visitedFragmentNames,
+          visitedFragmentFields,
+          fragmentName,
+          deferredFragmentFields,
           deferredFragmentLabels,
         );
         break;
       }
     }
   }
-  return fields;
+  return { fields, deferredFragmentFields, deferredFragmentLabels };
 }
 
 /**
@@ -731,6 +780,8 @@ function resolveField(
   source: mixed,
   fieldNodes: $ReadOnlyArray<FieldNode>,
   path: Path,
+  deferredFragmentLabels?: Array<string>,
+  deferredFragmentFields?: ObjMap<DeferredFragmentFieldInfo>,
   closestDeferredParent?: string,
 ): PromiseOrValue<mixed> {
   const fieldNode = fieldNodes[0];
@@ -769,6 +820,8 @@ function resolveField(
     info,
     path,
     result,
+    deferredFragmentLabels,
+    deferredFragmentFields,
     closestDeferredParent,
   );
 }
@@ -846,34 +899,42 @@ function completeValueCatchingError(
   info: GraphQLResolveInfo,
   path: Path,
   result: mixed,
+  deferredFragmentLabels?: Array<string>,
+  deferredFragmentFields?: ObjMap<DeferredFragmentFieldInfo>,
   closestDeferredParent?: string,
 ): PromiseOrValue<mixed> {
   const pathArray = pathToArray(path);
   // Items in a list inherit the deferred status of the list type
   // Therfore, we do not need to defer the item itself.
   const isListItem = typeof pathArray[pathArray.length - 1] === 'number';
-  const shouldDefer = fieldNodes.every(
-    (node, index, array) =>
+  const shouldDefer = fieldNodes.every((node, index, array) => {
+    const name = getFieldEntryKey(node);
+    const prevName =
+      index < array.length - 1 ? getFieldEntryKey(array[index + 1]) : '';
+
+    return (
       !isListItem &&
-      node.deferredLabel &&
-      typeof node.deferredLabel === 'string' &&
+      deferredFragmentFields &&
+      deferredFragmentFields[name] &&
+      deferredFragmentFields[name].resolveFieldToNull &&
       // TODO: Check if this is possible that label would be different
       // This should NOT be possible, highest deferred fragment should take precedence
       // Write tests to assert this before removing this condition
-      (index < array.length - 1
-        ? node.deferredLabel === array[index + 1].deferredLabel
-        : true),
-  );
+      (prevName
+        ? deferredFragmentFields[name].deferredFragmentLabel ===
+          deferredFragmentFields[prevName].deferredFragmentLabel
+        : true)
+    );
+  });
 
   let anyDeferredFieldNode;
   // A field can be in both a standard and deferred fragment.
   // Although the data for the field is returned as part of the initial response,
   // it also must be returned from the appropriate patches.
   const hasAnyDeferredFieldNode = fieldNodes.some(node => {
+    const name = getFieldEntryKey(node);
     const ret =
-      !isListItem &&
-      typeof node.deferredLabel === 'string' &&
-      node.deferredLabel;
+      !isListItem && deferredFragmentFields && deferredFragmentFields[name];
     if (ret) {
       anyDeferredFieldNode = node;
     }
@@ -900,11 +961,11 @@ function completeValueCatchingError(
       : closestDeferredParent || '';
 
   if (shouldDefer) {
-    deferredLabel = fieldNodes[0].deferredLabel || '';
+    const name = getFieldEntryKey(fieldNodes[0]);
+    deferredLabel = deferredFragmentFields[name].deferredFragmentLabel || '';
   } else if (hasAnyDeferredFieldNode) {
-    deferredLabel = anyDeferredFieldNode
-      ? anyDeferredFieldNode.deferredLabel
-      : '';
+    const name = getFieldEntryKey(anyDeferredFieldNode);
+    deferredLabel = deferredFragmentFields[name].deferredFragmentLabel || '';
   }
 
   try {
@@ -918,6 +979,8 @@ function completeValueCatchingError(
           info,
           path,
           resolved,
+          deferredFragmentLabels,
+          deferredFragmentFields,
           currentClosestDeferredParent,
         ),
       );
@@ -929,6 +992,8 @@ function completeValueCatchingError(
         info,
         path,
         result,
+        deferredFragmentLabels,
+        deferredFragmentFields,
         currentClosestDeferredParent,
       );
     }
@@ -972,6 +1037,7 @@ function completeValueCatchingError(
             path,
             returnType,
             exeContext,
+            deferredFragmentFields,
             closestDeferredParent,
           );
         }
@@ -996,6 +1062,7 @@ function completeValueCatchingError(
         path,
         returnType,
         exeContext,
+        deferredFragmentFields,
         closestDeferredParent,
       );
     }
@@ -1006,12 +1073,14 @@ function completeValueCatchingError(
   }
 }
 
+// TODO: Add types, girl!
 function handleDeferredFieldError(
   rawError,
   fieldNodes,
   path,
   returnType,
   exeContext,
+  deferredFragmentFields,
   closestDeferredParent,
 ) {
   const error = locatedError(
@@ -1022,24 +1091,31 @@ function handleDeferredFieldError(
   const pathArray = pathToArray(path);
   const isListItem = typeof pathArray[pathArray.length - 1] === 'number';
 
-  const shouldDefer = fieldNodes.every(
-    (node, index, array) =>
+  const shouldDefer = fieldNodes.every((node, index, array) => {
+    const name = getFieldEntryKey(node);
+    const prevName =
+      index < array.length - 1 ? getFieldEntryKey(array[index + 1]) : '';
+
+    return (
       !isListItem &&
-      typeof node.deferredLabel === 'string' &&
+      deferredFragmentFields &&
+      deferredFragmentFields[name] &&
+      deferredFragmentFields[name].resolveFieldToNull &&
       // TODO: Check if this is possible that label would be different
       // This should NOT be possible, highest deferred fragment should take precedence
       // Write tests to assert this before removing this condition
-      (index < array.length - 1
-        ? node.deferredLabel === array[index + 1].deferredLabel
-        : true),
-  );
+      (prevName
+        ? deferredFragmentFields[name].deferredFragmentLabel ===
+          deferredFragmentFields[prevName].deferredFragmentLabel
+        : true)
+    );
+  });
 
   let anyDeferredFieldNode;
-  // A field can be in both a standard and deferred fragment
-  // Although the data for the field is returned as part of the initial response
-  // it also needs to be on the appropriate patches
   const hasAnyDeferredFieldNode = fieldNodes.some(node => {
-    const ret = !isListItem && typeof node.deferredLabel === 'string';
+    const name = getFieldEntryKey(node);
+    const ret =
+      !isListItem && deferredFragmentFields && deferredFragmentFields[name];
     if (ret) {
       anyDeferredFieldNode = node;
     }
@@ -1049,11 +1125,11 @@ function handleDeferredFieldError(
   let deferredLabel = '';
 
   if (shouldDefer) {
-    deferredLabel = fieldNodes[0].deferredLabel || '';
+    const name = getFieldEntryKey(fieldNodes[0]);
+    deferredLabel = deferredFragmentFields[name].deferredFragmentLabel || '';
   } else if (hasAnyDeferredFieldNode) {
-    deferredLabel = anyDeferredFieldNode
-      ? anyDeferredFieldNode.deferredLabel
-      : '';
+    const name = getFieldEntryKey(anyDeferredFieldNode);
+    deferredLabel = deferredFragmentFields[name].deferredFragmentLabel || '';
   }
 
   if (hasAnyDeferredFieldNode) {
@@ -1080,9 +1156,9 @@ function handleDeferredFieldError(
   // If it is its parent that is deferred, errors should be returned with the
   // parent's patch, so store it on ExecutionContext first.
   // TODO: Investigate whether this condition is ever possible?
-  if (closestDeferredParent && !hasAnyDeferredFieldNode) {
-    // deferErrorToParent(exeContext, deferredLabel, closestDeferredParent, error);
-  }
+  // if (closestDeferredParent && !hasAnyDeferredFieldNode) {
+  // deferErrorToParent(exeContext, deferredLabel, closestDeferredParent, error);
+  // }
 }
 
 function handleFieldError(rawError, fieldNodes, path, returnType, exeContext) {
@@ -1132,6 +1208,8 @@ function completeValue(
   info: GraphQLResolveInfo,
   path: Path,
   result: mixed,
+  deferredFragmentLabels?: Array<string>,
+  deferredFragmentFields?: ObjMap<DeferredFragmentFieldInfo>,
   closestDeferredParent?: string,
 ): PromiseOrValue<mixed> {
   // If result is an Error, throw a located error.
@@ -1149,6 +1227,8 @@ function completeValue(
       info,
       path,
       result,
+      deferredFragmentLabels,
+      deferredFragmentFields,
       closestDeferredParent,
     );
     if (completed === null) {
@@ -1173,6 +1253,8 @@ function completeValue(
       info,
       path,
       result,
+      deferredFragmentLabels,
+      deferredFragmentFields,
       closestDeferredParent,
     );
   }
@@ -1193,6 +1275,8 @@ function completeValue(
       info,
       path,
       result,
+      deferredFragmentLabels,
+      deferredFragmentFields,
       closestDeferredParent,
     );
   }
@@ -1206,6 +1290,8 @@ function completeValue(
       info,
       path,
       result,
+      deferredFragmentLabels,
+      deferredFragmentFields,
       closestDeferredParent,
     );
   }
@@ -1229,6 +1315,8 @@ function completeListValue(
   info: GraphQLResolveInfo,
   path: Path,
   result: mixed,
+  deferredFragmentLabels?: Array<string>,
+  deferredFragmentFields?: ObjMap<DeferredFragmentFieldInfo>,
   closestDeferredParent?: string,
 ): PromiseOrValue<$ReadOnlyArray<mixed>> {
   if (!isCollection(result)) {
@@ -1253,6 +1341,8 @@ function completeListValue(
       info,
       fieldPath,
       item,
+      deferredFragmentLabels,
+      deferredFragmentFields,
       closestDeferredParent,
     );
 
@@ -1291,6 +1381,8 @@ function completeAbstractValue(
   info: GraphQLResolveInfo,
   path: Path,
   result: mixed,
+  deferredFragmentLabels?: Array<string>,
+  deferredFragmentFields?: ObjMap<DeferredFragmentFieldInfo>,
   closestDeferredParent?: string,
 ): PromiseOrValue<ObjMap<mixed>> {
   const resolveTypeFn = returnType.resolveType || exeContext.typeResolver;
@@ -1313,6 +1405,8 @@ function completeAbstractValue(
         info,
         path,
         result,
+        deferredFragmentLabels,
+        deferredFragmentFields,
         closestDeferredParent,
       ),
     );
@@ -1332,6 +1426,8 @@ function completeAbstractValue(
     info,
     path,
     result,
+    deferredFragmentLabels,
+    deferredFragmentFields,
     closestDeferredParent,
   );
 }
@@ -1378,6 +1474,8 @@ function completeObjectValue(
   info: GraphQLResolveInfo,
   path: Path,
   result: mixed,
+  deferredFragmentLabels?: Array<string>,
+  deferredFragmentFields?: ObjMap<DeferredFragmentFieldInfo>,
   closestDeferredParent?: string,
 ): PromiseOrValue<ObjMap<mixed>> {
   // If there is an isTypeOf predicate function, call it with the
@@ -1397,6 +1495,8 @@ function completeObjectValue(
           fieldNodes,
           path,
           result,
+          deferredFragmentLabels,
+          deferredFragmentFields,
           closestDeferredParent,
         );
       });
@@ -1413,6 +1513,8 @@ function completeObjectValue(
     fieldNodes,
     path,
     result,
+    deferredFragmentLabels,
+    deferredFragmentFields,
     closestDeferredParent,
   );
 }
@@ -1434,16 +1536,31 @@ function collectAndExecuteSubfields(
   fieldNodes: $ReadOnlyArray<FieldNode>,
   path: Path,
   result: mixed,
+  deferredFragmentLabels?: Array<string>,
+  deferredFragmentFields?: ObjMap<DeferredFragmentFieldInfo>,
   closestDeferredParent?: string,
 ): PromiseOrValue<ObjMap<mixed>> {
   // Collect sub-fields to execute to complete this value.
-  const subFieldNodes = collectSubfields(exeContext, returnType, fieldNodes);
+  const {
+    fields: subFieldNodes,
+    deferredFragmentFields: deferredFragmentSubFieldNodes,
+    deferredFragmentLabels: deferredFragmentSubLabels,
+  } = collectSubfields(
+    exeContext,
+    returnType,
+    fieldNodes,
+    deferredFragmentLabels,
+    deferredFragmentFields,
+  );
+
   return executeFields(
     exeContext,
     returnType,
     result,
     path,
     subFieldNodes,
+    deferredFragmentSubLabels,
+    deferredFragmentSubFieldNodes,
     closestDeferredParent,
   );
 }
@@ -1453,37 +1570,62 @@ function collectAndExecuteSubfields(
  * type. Memoizing ensures the subfields are not repeatedly calculated, which
  * saves overhead when resolving lists of values.
  */
-const collectSubfields = memoize3(_collectSubfields);
+//const collectSubfields = memoize3(_collectSubfields);
+function collectSubfields(
+  exeContext: ExecutionContext,
+  returnType: GraphQLObjectType,
+  fieldNodes: $ReadOnlyArray<FieldNode>,
+  deferredFragmentLabels?: Array<string>,
+  deferredFragmentFields?: ObjMap<DeferredFragmentFieldInfo>,
+) {
+  if (
+    (!deferredFragmentLabels && !deferredFragmentLabels) ||
+    ((deferredFragmentLabels || []).length === 0 &&
+      Object.keys(deferredFragmentFields || {}).length === 0)
+  ) {
+    return memoize3(_collectSubfields)(exeContext, returnType, fieldNodes);
+  }
+  // TODO: This can benefit from a cache; add a memoize method for the additonal arguments
+  return _collectSubfields(...arguments);
+}
+
 function _collectSubfields(
   exeContext: ExecutionContext,
   returnType: GraphQLObjectType,
   fieldNodes: $ReadOnlyArray<FieldNode>,
-): ObjMap<Array<FieldNode>> {
+  deferredFragmentLabels?: Array<string>,
+  deferredFragmentFields?: ObjMap<DeferredFragmentFieldInfo>,
+): {|
+  fields: ObjMap<Array<FieldNode>>,
+  deferredFragmentFields: ObjMap<DeferredFragmentFieldInfo>,
+  deferredFragmentLabels: Array<string>,
+|} {
   let subFieldNodes = Object.create(null);
+  let deferredFragmentSubFieldNodes = Object.create(null);
+  let deferredFragmentSubLabels = [];
   const visitedFragmentNames = Object.create(null);
-  const deferredFragmentLabels = [];
-  // If parent field has deferredLabel, add it deferredFragmentLabels
-  // so that it's subfields will also have this label set.
-  fieldNodes.some(fieldNode => {
-    if (fieldNode.deferredLabel) {
-      deferredFragmentLabels.push(fieldNode.deferredLabel);
-      return true;
-    }
-    return false;
-  });
   for (const node of fieldNodes) {
     if (node.selectionSet) {
-      subFieldNodes = collectFields(
+      const ret = collectFields(
         exeContext,
         returnType,
         node.selectionSet,
         subFieldNodes,
         visitedFragmentNames,
-        deferredFragmentLabels,
+        '',
+        deferredFragmentFields || Object.create(null),
+        deferredFragmentLabels || [],
       );
+      subFieldNodes = ret.fields;
+      deferredFragmentSubFieldNodes = ret.deferredFragmentFields;
+      deferredFragmentSubLabels = ret.deferredFragmentLabels;
     }
   }
-  return subFieldNodes;
+  return {
+    fields: subFieldNodes,
+    deferredFragmentFields: deferredFragmentSubFieldNodes,
+    deferredFragmentLabels: deferredFragmentSubLabels,
+  };
 }
 
 /**

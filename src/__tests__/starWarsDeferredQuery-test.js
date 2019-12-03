@@ -82,6 +82,69 @@ describe('Star Wars Query Deferred Tests', () => {
 
   describe('Nested Queries', () => {});
 
+  describe('Nested Deferred Fragments', () => {
+    it('Allows to us defer a fragment within an already deferred fragment', async () => {
+      const query = `
+        query HeroNameQuery {
+          hero {
+            id
+            ...DroidFragment @defer(label: "DeferDroid")
+          }
+        }
+
+        fragment DroidFragment on Droid {
+          id
+          name
+          ...DroidNestedFragment @defer(label: "DeferNested")
+        }
+
+        fragment DroidNestedFragment on Droid {
+          appearsIn
+          primaryFunction
+        }
+      `;
+
+      const result = await graphql(StarWarsSchemaDeferEnabled, query);
+      const { patches: patchesIterable, ...rest } = result;
+      expect(rest).to.deep.equal({
+        data: {
+          hero: {
+            id: '2001',
+            name: null,
+            appearsIn: null,
+            primaryFunction: null,
+          },
+        },
+      });
+
+      const patches = [];
+
+      if (patchesIterable) {
+        await forAwaitEach(patchesIterable, patch => {
+          patches.push(patch);
+        });
+      }
+
+      expect(patches).to.have.lengthOf(2);
+      expect(patches[0]).to.deep.equal({
+        label: 'DeferDroid',
+        path: ['hero'],
+        data: {
+          id: '2001',
+          name: 'R2-D2',
+        },
+      });
+      expect(patches[1]).to.deep.equal({
+        label: 'DeferNested',
+        path: ['hero'],
+        data: {
+          appearsIn: ['NEWHOPE', 'EMPIRE', 'JEDI'],
+          primaryFunction: 'Astromech',
+        },
+      });
+    });
+  });
+
   describe('Using IDs and query parameters to refetch objects', () => {});
 
   describe('Using aliases to change the key in the response', () => {});
