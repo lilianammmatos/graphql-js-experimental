@@ -525,8 +525,11 @@ describe('Type System Printer', () => {
       Directs the executor to defer this fragment when the \`if\` argument is true or undefined.
       """
       directive @defer(
-        """Defer fragment when true or undefined."""
+        """Deferred when true or undefined."""
         if: Boolean
+
+        """Unique name"""
+        label: String!
       ) on FRAGMENT_SPREAD | INLINE_FRAGMENT
 
       """Marks an element of a GraphQL schema as no longer supported."""
@@ -762,8 +765,11 @@ describe('Type System Printer', () => {
       
       # Directs the executor to defer this fragment when the \`if\` argument is true or undefined.
       directive @defer(
-        # Defer fragment when true or undefined.
+        # Deferred when true or undefined.
         if: Boolean
+
+        # Unique name
+        label: String!
       ) on FRAGMENT_SPREAD | INLINE_FRAGMENT
 
       # Marks an element of a GraphQL schema as no longer supported.

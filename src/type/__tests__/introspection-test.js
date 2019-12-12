@@ -860,6 +860,19 @@ describe('Introspection', () => {
                     ofType: null,
                   },
                 },
+                {
+                  defaultValue: null,
+                  name: 'label',
+                  type: {
+                    kind: 'NON_NULL',
+                    name: null,
+                    ofType: {
+                      kind: 'SCALAR',
+                      name: 'String',
+                      ofType: null,
+                    },
+                  },
+                },
               ],
             },
             {
