@@ -228,11 +228,12 @@ export function createSourceEventStream(
     }
 
     const type = getOperationRootType(schema, exeContext.operation);
-    const fields = collectFields(
+    const { fields } = collectFields(
       exeContext,
       type,
       exeContext.operation.selectionSet,
       Object.create(null),
+      [],
       Object.create(null),
     );
     const responseNames = Object.keys(fields);
