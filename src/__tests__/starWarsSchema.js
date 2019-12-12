@@ -172,6 +172,19 @@ const humanType = new GraphQLObjectType({
       type: GraphQLString,
       description: 'The home planet of the human, or null if unknown.',
     },
+    secretFriend: {
+      type: GraphQLString,
+      description: 'A friend of the human whose identity should remain hidden.',
+      resolve() {
+        return new Promise(resolve => {
+          setTimeout(() => {
+            resolve();
+          }, 10);
+        }).then(() => {
+          throw new Error('secretFriend is secret.');
+        });
+      },
+    },
     secretBackstory: {
       type: GraphQLString,
       description: 'Where are they from and how they came to be who they are.',
@@ -291,4 +304,10 @@ const queryType = new GraphQLObjectType({
 export const StarWarsSchema = new GraphQLSchema({
   query: queryType,
   types: [humanType, droidType],
+});
+
+export const StarWarsSchemaDeferEnabled = new GraphQLSchema({
+  query: queryType,
+  types: [humanType, droidType],
+  experimentalDeferFragmentSpreads: true,
 });
