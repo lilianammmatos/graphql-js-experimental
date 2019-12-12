@@ -176,12 +176,18 @@ export const GraphQLDeferDirective = new GraphQLDirective({
     'Directs the executor to defer this fragment when the `if` argument is true or undefined.',
   locations: [
     DirectiveLocation.FRAGMENT_SPREAD,
+    // TODO: Do we want to support on inline fragments? (Can we? How would you make label unique?)
     DirectiveLocation.INLINE_FRAGMENT,
   ],
   args: {
     if: {
       type: GraphQLBoolean,
-      description: 'Defer fragment when true or undefined.',
+      description: 'Deferred when true or undefined.',
+    },
+    label: {
+      type: GraphQLNonNull(GraphQLString),
+      description: 'Unique name',
+      // TODO: Add defaultValue for label?
     },
   },
 });
