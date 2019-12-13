@@ -1,7 +1,7 @@
 // @flow strict
 
-import { forAwaitEach } from 'iterall';
 import { expect } from 'chai';
+import { forAwaitEach } from 'iterall';
 import { describe, it } from 'mocha';
 
 import { graphql } from '../graphql';
