@@ -601,6 +601,20 @@ describe('Type System Printer', () => {
         label: String!
       ) on FRAGMENT_SPREAD | INLINE_FRAGMENT
 
+      """
+      Directs the executor to stream plural fields when the \`if\` argument is true or undefined.
+      """
+      directive @stream(
+        """Stream when true or undefined."""
+        if: Boolean
+
+        """Unique name"""
+        label: String!
+
+        """Number of items to return immediately"""
+        initial_count: Int!
+      ) on FIELD
+
       """Marks an element of a GraphQL schema as no longer supported."""
       directive @deprecated(
         """
@@ -822,6 +836,18 @@ describe('Type System Printer', () => {
         # Unique name
         label: String!
       ) on FRAGMENT_SPREAD | INLINE_FRAGMENT
+
+      # Directs the executor to stream plural fields when the \`if\` argument is true or undefined.
+      directive @stream(
+        # Stream when true or undefined.
+        if: Boolean
+
+        # Unique name
+        label: String!
+
+        # Number of items to return immediately
+        initial_count: Int!
+      ) on FIELD
 
       # Marks an element of a GraphQL schema as no longer supported.
       directive @deprecated(

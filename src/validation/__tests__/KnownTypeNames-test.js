@@ -89,10 +89,6 @@ describe('Validate: Known type names', () => {
         message: 'Unknown type "Float".',
         locations: [{ line: 2, column: 31 }],
       },
-      {
-        message: 'Unknown type "Int".',
-        locations: [{ line: 2, column: 44 }],
-      },
     ]);
   });
 

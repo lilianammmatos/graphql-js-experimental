@@ -807,6 +807,15 @@ describe('Introspection', () => {
               ],
               possibleTypes: null,
             },
+            {
+              kind: 'SCALAR',
+              name: 'Int',
+              fields: null,
+              inputFields: null,
+              interfaces: null,
+              enumValues: null,
+              possibleTypes: null,
+            },
           ],
           directives: [
             {
@@ -869,6 +878,47 @@ describe('Introspection', () => {
                     ofType: {
                       kind: 'SCALAR',
                       name: 'String',
+                      ofType: null,
+                    },
+                  },
+                },
+              ],
+            },
+            {
+              name: 'stream',
+              locations: ['FIELD'],
+              args: [
+                {
+                  defaultValue: null,
+                  name: 'if',
+                  type: {
+                    kind: 'SCALAR',
+                    name: 'Boolean',
+                    ofType: null,
+                  },
+                },
+                {
+                  defaultValue: null,
+                  name: 'label',
+                  type: {
+                    kind: 'NON_NULL',
+                    name: null,
+                    ofType: {
+                      kind: 'SCALAR',
+                      name: 'String',
+                      ofType: null,
+                    },
+                  },
+                },
+                {
+                  defaultValue: null,
+                  name: 'initial_count',
+                  type: {
+                    kind: 'NON_NULL',
+                    name: null,
+                    ofType: {
+                      kind: 'SCALAR',
+                      name: 'Int',
                       ofType: null,
                     },
                   },
