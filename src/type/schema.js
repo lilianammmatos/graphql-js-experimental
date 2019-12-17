@@ -136,6 +136,7 @@ export class GraphQLSchema {
   __validationErrors: ?$ReadOnlyArray<GraphQLError>;
   // Referenced by execute()
   __experimentalDeferFragmentSpreads: boolean;
+  __experimentalStream: boolean;
 
   constructor(config: GraphQLSchemaConfig): void {
     // If this schema was built from a source known to be valid, then it may be
@@ -165,6 +166,7 @@ export class GraphQLSchema {
 
     this.__experimentalDeferFragmentSpreads =
       config.experimentalDeferFragmentSpreads || false;
+    this.__experimentalStream = config.experimentalStream || false;
     this._queryType = config.query;
     this._mutationType = config.mutation;
     this._subscriptionType = config.subscription;
@@ -327,6 +329,18 @@ export type GraphQLSchemaValidationOptions = {|
    * Default: false
    */
   experimentalDeferFragmentSpreads?: boolean,
+
+  /**
+   *
+   * EXPERIMENTAL:
+   *
+   * If enabled, items from a plural fields with @stream directive
+   * are not returned from the iniital query and each item is returned
+   * in a patch after the initial result from the synchronous query.
+   *
+   * Default: false
+   */
+  experimentalStream?: boolean,
 |};
 
 export type GraphQLSchemaConfig = {|

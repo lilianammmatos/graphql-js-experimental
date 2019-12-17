@@ -55,6 +55,7 @@ import {
   GraphQLSkipDirective,
   GraphQLIncludeDirective,
   GraphQLDeferDirective,
+  GraphQLStreamDirective,
   GraphQLDeprecatedDirective,
 } from '../type/directives';
 import {
@@ -173,6 +174,10 @@ export function buildASTSchema(
 
   if (!directives.some(directive => directive.name === 'defer')) {
     directives.push(GraphQLDeferDirective);
+  }
+
+  if (!directives.some(directive => directive.name === 'stream')) {
+    directives.push(GraphQLStreamDirective);
   }
 
   if (!directives.some(directive => directive.name === 'deprecated')) {

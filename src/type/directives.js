@@ -193,6 +193,30 @@ export const GraphQLDeferDirective = new GraphQLDirective({
 });
 
 /**
+ * Used to conditionally defer fragments.
+ */
+export const GraphQLStreamDirective = new GraphQLDirective({
+  name: 'stream',
+  description:
+    'Directs the executor to stream plural fields when the `if` argument is true or undefined.',
+  locations: [DirectiveLocation.FIELD],
+  args: {
+    if: {
+      type: GraphQLBoolean,
+      description: 'Stream when true or undefined.',
+    },
+    label: {
+      type: GraphQLNonNull(GraphQLString),
+      description: 'Unique name',
+    },
+    initial_count: {
+      type: GraphQLNonNull(GraphQLInt),
+      description: 'Number of items to return immediately',
+    },
+  },
+});
+
+/**
  * Constant string used for default reason for a deprecation.
  */
 export const DEFAULT_DEPRECATION_REASON = 'No longer supported';
@@ -221,6 +245,7 @@ export const specifiedDirectives = Object.freeze([
   GraphQLIncludeDirective,
   GraphQLSkipDirective,
   GraphQLDeferDirective,
+  GraphQLStreamDirective,
   GraphQLDeprecatedDirective,
 ]);
 
