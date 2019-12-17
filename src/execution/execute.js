@@ -42,6 +42,7 @@ import {
   GraphQLIncludeDirective,
   GraphQLSkipDirective,
   GraphQLDeferDirective,
+  GraphQLStreamDirective,
 } from '../type/directives';
 import {
   type GraphQLObjectType,
@@ -1051,10 +1052,46 @@ function completeListValue(
     // No need to modify the info object containing the path,
     // since from here on it is not ever accessed by resolver functions.
     const fieldPath = addPath(path, index);
+    const initialFieldNodes = [];
+    for (const fieldNode of fieldNodes) {
+      const stream = getDirectiveValues(
+        GraphQLStreamDirective,
+        fieldNode,
+        exeContext.variableValues,
+      );
+      if (
+        exeContext.schema.__experimentalStream &&
+        stream &&
+        stream.if !== false &&
+        index >= stream.initial_count
+      ) {
+        const patchErrors = [];
+        exeContext.dispatcher.add(
+          stream.label,
+          fieldPath,
+          () =>
+            completeValueCatchingError(
+              exeContext,
+              itemType,
+              [fieldNode],
+              info,
+              fieldPath,
+              item,
+              patchErrors,
+            ),
+          patchErrors,
+        );
+      } else {
+        initialFieldNodes.push(fieldNode);
+      }
+    }
+    if (!initialFieldNodes.length) {
+      return;
+    }
     const completedItem = completeValueCatchingError(
       exeContext,
       itemType,
-      fieldNodes,
+      initialFieldNodes,
       info,
       fieldPath,
       item,
