@@ -2,7 +2,6 @@
 
 import { $$asyncIterator } from 'iterall';
 
-import { type ObjMap } from '../jsutils/ObjMap';
 import { type Path, pathToArray } from '../jsutils/Path';
 import { type PromiseOrValue } from '../jsutils/PromiseOrValue';
 import isPromise from '../jsutils/isPromise';
@@ -16,10 +15,7 @@ export class Dispatcher {
     this._patches = [];
   }
 
-  execute(
-    fn: () => PromiseOrValue<ObjMap<mixed>>,
-    errors: Array<GraphQLError>,
-  ) {
+  execute(fn: () => PromiseOrValue<mixed>, errors: Array<GraphQLError>) {
     try {
       return fn();
     } catch (error) {
@@ -31,7 +27,7 @@ export class Dispatcher {
   add(
     label: string,
     path: Path | void,
-    fn: () => PromiseOrValue<ObjMap<mixed>>,
+    fn: () => PromiseOrValue<mixed>,
     errors: Array<GraphQLError>,
   ) {
     this._patches.push(
@@ -99,7 +95,7 @@ export class Dispatcher {
 
 export type ExecutionPatchResult = {
   errors?: $ReadOnlyArray<GraphQLError>,
-  data?: ObjMap<mixed> | null,
+  data?: mixed | null,
   path: $ReadOnlyArray<string | number>,
   label: string,
   ...
