@@ -6,7 +6,10 @@ import { describe, it } from 'mocha';
 
 import { graphql } from '../graphql';
 
-import { StarWarsSchema, StarWarsSchemaDeferEnabled } from './starWarsSchema';
+import {
+  StarWarsSchema,
+  StarWarsSchemaDeferStreamEnabled,
+} from './starWarsSchema';
 
 describe('Star Wars Query Deferred Tests', () => {
   describe('Compatibility', () => {
@@ -49,7 +52,7 @@ describe('Star Wars Query Deferred Tests', () => {
           name
         }
       `;
-      const result = await graphql(StarWarsSchemaDeferEnabled, query);
+      const result = await graphql(StarWarsSchemaDeferStreamEnabled, query);
       const { patches: patchesIterable, ...initial } = result;
       expect(initial).to.deep.equal({
         data: {
@@ -102,7 +105,7 @@ describe('Star Wars Query Deferred Tests', () => {
         }
       `;
 
-      const result = await graphql(StarWarsSchemaDeferEnabled, query);
+      const result = await graphql(StarWarsSchemaDeferStreamEnabled, query);
       const { patches: patchesIterable, ...rest } = result;
       expect(rest).to.deep.equal({
         data: {
@@ -179,7 +182,7 @@ describe('Star Wars Query Deferred Tests', () => {
           }
         }
       `;
-      const result = await graphql(StarWarsSchemaDeferEnabled, query);
+      const result = await graphql(StarWarsSchemaDeferStreamEnabled, query);
       const { patches: patchesIterable, ...rest } = result;
 
       expect(rest).to.deep.equal({
@@ -292,7 +295,7 @@ describe('Star Wars Query Deferred Tests', () => {
           secretBackstory
         }
       `;
-      const result = await graphql(StarWarsSchemaDeferEnabled, query);
+      const result = await graphql(StarWarsSchemaDeferStreamEnabled, query);
       const { patches: patchesIterable, ...initial } = result;
 
       expect(initial).to.deep.equal({
@@ -343,7 +346,7 @@ describe('Star Wars Query Deferred Tests', () => {
           }
         }
       `;
-      const result = await graphql(StarWarsSchemaDeferEnabled, query);
+      const result = await graphql(StarWarsSchemaDeferStreamEnabled, query);
       const { patches: patchesIterable, ...initial } = result;
       expect(initial).to.deep.equal({
         data: {
@@ -426,7 +429,7 @@ describe('Star Wars Query Deferred Tests', () => {
             story: secretBackstory
         }
       `;
-      const result = await graphql(StarWarsSchemaDeferEnabled, query);
+      const result = await graphql(StarWarsSchemaDeferStreamEnabled, query);
       const { patches: patchesIterable, ...initial } = result;
       expect(initial).to.deep.equal({
         data: {
@@ -470,7 +473,7 @@ describe('Star Wars Query Deferred Tests', () => {
           secretFriend
         }
       `;
-      const result = await graphql(StarWarsSchemaDeferEnabled, query);
+      const result = await graphql(StarWarsSchemaDeferStreamEnabled, query);
       const { patches: patchesIterable, ...initial } = result;
       expect(initial).to.deep.equal({
         data: {
